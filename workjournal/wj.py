@@ -21,6 +21,18 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.expanduser("~/.config/wj/config.json")
 DEFAULT_AUDIO_DEVICE = "0"
 
+# Single source of truth for supported config keys.
+# Used for help text, validation, and get/set behavior.
+CONFIG_KEYS = {
+    "audio-device": "Audio input device index for FFmpeg AVFoundation recording (e.g. 0, 1)",
+}
+
+# Accepted aliases that map to canonical keys.
+# Lets users use underscores or alternate spellings without errors.
+CONFIG_ALIASES = {
+    "audio_device": "audio-device",
+}
+
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -36,6 +48,28 @@ def save_config(config):
         f.write("\n")
 
 
+def resolve_config_key(key):
+    """Return the canonical key, or None if not recognised.
+
+    Checks aliases first, then canonical keys directly.
+    """
+    if key in CONFIG_ALIASES:
+        return CONFIG_ALIASES[key]
+    if key in CONFIG_KEYS:
+        return key
+    return None
+
+
+def suggest_config_key(key):
+    """Return a suggestion string if the key looks like a near-miss, else empty string."""
+    # Try swapping hyphens/underscores
+    swapped = key.replace("-", "_") if "-" in key else key.replace("_", "-")
+    if resolve_config_key(swapped) is not None:
+        canonical = resolve_config_key(swapped)
+        return f" Did you mean '{canonical}'?"
+    return ""
+
+
 def get_audio_device(args):
     """Resolve audio device following precedence: flag > env var > config > default."""
     if getattr(args, "audio_device", None) is not None:
@@ -43,8 +77,8 @@ def get_audio_device(args):
     if "WJ_AUDIO_DEVICE" in os.environ:
         return os.environ["WJ_AUDIO_DEVICE"]
     config = load_config()
-    if "audio_device" in config:
-        return str(config["audio_device"])
+    if "audio-device" in config:
+        return str(config["audio-device"])
     return DEFAULT_AUDIO_DEVICE
 
 
@@ -302,24 +336,55 @@ def cmd_paste(args):
 
 
 def cmd_config(args):
-    config = load_config()
-    if args.config_command == "get":
-        key = args.key
+    config_command = getattr(args, "config_command", None)
+
+    if config_command == "help":
+        print("Supported config keys:\n")
+        for key, desc in CONFIG_KEYS.items():
+            print(f"  {key}\n    {desc}\n")
+        print(f"Config file: {CONFIG_PATH}")
+        return
+
+    if config_command == "get":
+        raw_key = args.key
+        key = resolve_config_key(raw_key)
+        if key is None:
+            suggestion = suggest_config_key(raw_key)
+            print(f"Error: Unknown config key '{raw_key}'.{suggestion}", file=sys.stderr)
+            print(f"Run 'wj config help' to see supported keys.", file=sys.stderr)
+            sys.exit(1)
+        config = load_config()
         if key in config:
             print(f"{key} = {config[key]}")
         else:
-            print(f"{key} is not set (default: {DEFAULT_AUDIO_DEVICE if key == 'audio_device' else 'none'})")
-    elif args.config_command == "set":
-        config[args.key] = args.value
+            default = DEFAULT_AUDIO_DEVICE if key == "audio-device" else "none"
+            print(f"{key} is not set (default: {default})")
+        return
+
+    if config_command == "set":
+        raw_key = args.key
+        key = resolve_config_key(raw_key)
+        if key is None:
+            suggestion = suggest_config_key(raw_key)
+            print(f"Error: Unknown config key '{raw_key}'.{suggestion}", file=sys.stderr)
+            print(f"Run 'wj config help' to see supported keys.", file=sys.stderr)
+            sys.exit(1)
+        if raw_key != key:
+            print(f"Note: '{raw_key}' is an alias for '{key}'.")
+        config = load_config()
+        config[key] = args.value
         save_config(config)
-        print(f"Set {args.key} = {args.value}  (saved to {CONFIG_PATH})")
+        print(f"Set {key} = {args.value}  (saved to {CONFIG_PATH})")
+        return
+
+    # No subcommand: show current config
+    config = load_config()
+    if config:
+        for k, v in config.items():
+            print(f"{k} = {v}")
     else:
-        # No subcommand: show all config
-        if config:
-            for k, v in config.items():
-                print(f"{k} = {v}")
-        else:
-            print(f"No config set. ({CONFIG_PATH})")
+        print(f"No config set. ({CONFIG_PATH})")
+    print("Run 'wj config help' to see supported keys.")
 
 
 def cmd_today(args):
@@ -355,10 +420,11 @@ def main():
     sub.add_parser("edit", help="Open today's log in editor")
     config_parser = sub.add_parser("config", help="Get or set persistent configuration")
     config_sub = config_parser.add_subparsers(dest="config_command")
+    config_sub.add_parser("help", help="List all supported config keys and descriptions")
     get_parser = config_sub.add_parser("get", help="Get a config value")
-    get_parser.add_argument("key", help="Config key (e.g. audio_device)")
+    get_parser.add_argument("key", help="Config key (e.g. audio-device)")
     set_parser = config_sub.add_parser("set", help="Set a config value")
-    set_parser.add_argument("key", help="Config key (e.g. audio_device)")
+    set_parser.add_argument("key", help="Config key (e.g. audio-device)")
     set_parser.add_argument("value", help="Value to set")
     args = parser.parse_args()
 
