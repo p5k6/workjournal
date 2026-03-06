@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "workjournal"
+version = "0.1.0"
+description = "A lightweight CLI for capturing and structuring daily work notes"
+authors = []
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+requests = "^2.31.0"
+
+[tool.poetry.scripts]
+wj = "workjournal.wj:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry-core.masonry.api"
