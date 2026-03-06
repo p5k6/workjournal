@@ -3,6 +3,7 @@
 
 import argparse
 import datetime
+import json
 import os
 import shutil
 import subprocess
@@ -16,6 +17,35 @@ OLLAMA_MODEL = "qwen2.5:7b"
 
 # Project root is one level above this package directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+CONFIG_PATH = os.path.expanduser("~/.config/wj/config.json")
+DEFAULT_AUDIO_DEVICE = "0"
+
+
+def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        return {}
+    with open(CONFIG_PATH) as f:
+        return json.load(f)
+
+
+def save_config(config):
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+
+
+def get_audio_device(args):
+    """Resolve audio device following precedence: flag > env var > config > default."""
+    if getattr(args, "audio_device", None) is not None:
+        return str(args.audio_device)
+    if "WJ_AUDIO_DEVICE" in os.environ:
+        return os.environ["WJ_AUDIO_DEVICE"]
+    config = load_config()
+    if "audio_device" in config:
+        return str(config["audio_device"])
+    return DEFAULT_AUDIO_DEVICE
 
 
 def load_prompt(name):
@@ -132,16 +162,16 @@ def append_to_log(entry):
     print(f"Appended to {path}")
 
 
-def record_audio(filepath):
+def record_audio(filepath, device=DEFAULT_AUDIO_DEVICE):
     try:
         proc = subprocess.Popen(
             [
                 "ffmpeg",
                 "-f", "avfoundation",
-                "-i", ":0",       # macOS default microphone
-                "-ar", "16000",   # 16 kHz sample rate
-                "-ac", "1",       # mono
-                "-y",             # overwrite output without prompting
+                "-i", f":{device}",  # macOS audio input device
+                "-ar", "16000",      # 16 kHz sample rate
+                "-ac", "1",          # mono
+                "-y",                # overwrite output without prompting
                 filepath,
             ],
             stdin=subprocess.PIPE,
@@ -150,7 +180,7 @@ def record_audio(filepath):
     except FileNotFoundError:
         print("Error: 'ffmpeg' not found. Install it: brew install ffmpeg", file=sys.stderr)
         sys.exit(1)
-    print("Recording... Press Enter to stop.")
+    print(f"Recording... Press Enter to stop. (device :{device})")
     try:
         input()
     except KeyboardInterrupt:
@@ -202,6 +232,8 @@ def cmd_log(args):
     if not args.transcript_only:
         check_ollama()
 
+    device = get_audio_device(args)
+
     audio_save_path = None
     if args.keep_audio:
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -209,7 +241,7 @@ def cmd_log(args):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = os.path.join(tmpdir, "recording.wav")
-        record_audio(audio_path)
+        record_audio(audio_path, device)
         print("Transcribing...")
         text = transcribe(audio_path, tmpdir)
         if audio_save_path:
@@ -269,6 +301,27 @@ def cmd_paste(args):
         append_to_log(final_entry)
 
 
+def cmd_config(args):
+    config = load_config()
+    if args.config_command == "get":
+        key = args.key
+        if key in config:
+            print(f"{key} = {config[key]}")
+        else:
+            print(f"{key} is not set (default: {DEFAULT_AUDIO_DEVICE if key == 'audio_device' else 'none'})")
+    elif args.config_command == "set":
+        config[args.key] = args.value
+        save_config(config)
+        print(f"Set {args.key} = {args.value}  (saved to {CONFIG_PATH})")
+    else:
+        # No subcommand: show all config
+        if config:
+            for k, v in config.items():
+                print(f"{k} = {v}")
+        else:
+            print(f"No config set. ({CONFIG_PATH})")
+
+
 def cmd_today(args):
     path = get_log_path()
     if not os.path.exists(path):
@@ -295,10 +348,18 @@ def main():
     log_parser = sub.add_parser("log", help="Record a voice note and append to journal")
     log_parser.add_argument("--transcript-only", action="store_true", help="Record and transcribe only; do not call Ollama or append")
     log_parser.add_argument("--keep-audio", action="store_true", help="Save recorded audio to /tmp for debugging")
+    log_parser.add_argument("--audio-device", metavar="N", help="FFmpeg AVFoundation audio device index (overrides config and env)")
     paste_parser = sub.add_parser("paste", help="Paste or type notes and append to journal")
     paste_parser.add_argument("--dry-run", action="store_true", help="Show generated entry without appending to journal")
     sub.add_parser("today", help="Print today's log")
     sub.add_parser("edit", help="Open today's log in editor")
+    config_parser = sub.add_parser("config", help="Get or set persistent configuration")
+    config_sub = config_parser.add_subparsers(dest="config_command")
+    get_parser = config_sub.add_parser("get", help="Get a config value")
+    get_parser.add_argument("key", help="Config key (e.g. audio_device)")
+    set_parser = config_sub.add_parser("set", help="Set a config value")
+    set_parser.add_argument("key", help="Config key (e.g. audio_device)")
+    set_parser.add_argument("value", help="Value to set")
     args = parser.parse_args()
 
     if args.command == "log":
@@ -309,6 +370,8 @@ def main():
         cmd_today(args)
     elif args.command == "edit":
         cmd_edit(args)
+    elif args.command == "config":
+        cmd_config(args)
     else:
         parser.print_help()
 
