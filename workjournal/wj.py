@@ -4,6 +4,7 @@
 import argparse
 import datetime
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -198,16 +199,36 @@ def transcribe(audio_path, output_dir):
 
 
 def cmd_log(args):
-    check_ollama()
+    if not args.transcript_only:
+        check_ollama()
+
+    audio_save_path = None
+    if args.keep_audio:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        audio_save_path = f"/tmp/wj_audio_{ts}.wav"
+
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = os.path.join(tmpdir, "recording.wav")
         record_audio(audio_path)
         print("Transcribing...")
         text = transcribe(audio_path, tmpdir)
+        if audio_save_path:
+            shutil.copy2(audio_path, audio_save_path)
+
+    if args.transcript_only:
+        print("\n--- Raw transcript ---")
+        print(text if text else "(empty — Whisper produced no output)")
+        print("----------------------")
+        if audio_save_path:
+            print(f"Audio saved to: {audio_save_path}")
+        return
+
     if not text:
         print("No speech detected.", file=sys.stderr)
         sys.exit(1)
     print(f"Transcript: {text}")
+    if audio_save_path:
+        print(f"Audio saved to: {audio_save_path}")
     print("Cleaning up with Ollama...")
     body = cleanup_with_ollama(text)
     entry = build_entry(body)
@@ -271,7 +292,9 @@ def cmd_edit(args):
 def main():
     parser = argparse.ArgumentParser(prog="wj", description="Work journal CLI")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("log", help="Record a voice note and append to journal")
+    log_parser = sub.add_parser("log", help="Record a voice note and append to journal")
+    log_parser.add_argument("--transcript-only", action="store_true", help="Record and transcribe only; do not call Ollama or append")
+    log_parser.add_argument("--keep-audio", action="store_true", help="Save recorded audio to /tmp for debugging")
     paste_parser = sub.add_parser("paste", help="Paste or type notes and append to journal")
     paste_parser.add_argument("--dry-run", action="store_true", help="Show generated entry without appending to journal")
     sub.add_parser("today", help="Print today's log")
