@@ -11,6 +11,7 @@ import sys
 import tempfile
 
 import requests
+import yaml
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5:7b"
@@ -82,6 +83,43 @@ def get_audio_device(args):
     return DEFAULT_AUDIO_DEVICE
 
 
+VOCAB_CONFIG_PATH = os.path.expanduser("~/.config/workjournal/vocabulary.yaml")
+
+
+def load_vocabulary():
+    """Load vocabulary and corrections from the user config file.
+
+    Returns (vocab_list, corrections_dict). Both are empty if the file
+    does not exist or the relevant sections are absent.
+    """
+    if not os.path.exists(VOCAB_CONFIG_PATH):
+        return [], {}
+    with open(VOCAB_CONFIG_PATH) as f:
+        data = yaml.safe_load(f) or {}
+    vocab = data.get("vocabulary", []) or []
+    corrections = data.get("corrections", {}) or {}
+    return vocab, corrections
+
+
+def build_vocab_section(vocab, corrections):
+    """Build the vocabulary injection block for the Ollama prompt.
+
+    Returns an empty string when both lists are empty.
+    """
+    if not vocab and not corrections:
+        return ""
+    lines = []
+    if vocab:
+        lines.append("Preferred vocabulary terms (use these spellings when context suggests they are intended):")
+        for term in vocab:
+            lines.append(f"- {term}")
+    if corrections:
+        lines.append("Common transcription corrections (apply when context suggests the match):")
+        for wrong, right in corrections.items():
+            lines.append(f'- "{wrong}" → "{right}"')
+    return "\n\n" + "\n".join(lines)
+
+
 def load_prompt(name):
     path = os.path.join(PROJECT_ROOT, "prompts-runtime", name)
     with open(path) as f:
@@ -126,7 +164,9 @@ def check_ollama():
 
 def cleanup_with_ollama(text):
     prompt = load_prompt("cleanup.md")
-    full_prompt = f"{prompt}\n\nNotes:\n{text}"
+    vocab, corrections = load_vocabulary()
+    vocab_section = build_vocab_section(vocab, corrections)
+    full_prompt = f"{prompt}{vocab_section}\n\nNotes:\n{text}"
     try:
         r = requests.post(
             OLLAMA_URL,

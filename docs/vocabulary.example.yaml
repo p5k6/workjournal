@@ -1,0 +1,15 @@
+# Example vocabulary configuration for workjournal.
+# Copy to ~/.config/workjournal/vocabulary.yaml and customize.
+#
+# Both sections are optional. Remove either if not needed.
+
+vocabulary:
+  - Fivetran
+  - Snowflake
+  - Datadog
+  - Terraform
+  - OpenTofu
+
+corrections:
+  "5 train": "Fivetran"
+  "five train": "Fivetran"
